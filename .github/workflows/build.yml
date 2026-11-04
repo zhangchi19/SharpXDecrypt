@@ -1,0 +1,79 @@
+name: Build SharpXDecrypt
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'C#/**'
+      - '.github/workflows/build.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Compile executable
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $framework = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319'
+          $csc = Join-Path $framework 'csc.exe'
+          if (-not (Test-Path -LiteralPath $csc)) {
+            $framework = Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319'
+            $csc = Join-Path $framework 'csc.exe'
+          }
+          if (-not (Test-Path -LiteralPath $csc)) {
+            throw '.NET Framework C# compiler not found.'
+          }
+
+          $sources = @(Get-ChildItem -LiteralPath './C#' -Filter '*.cs' -File |
+            Sort-Object Name | ForEach-Object { $_.FullName })
+          if ($sources.Count -eq 0) {
+            throw 'No C# source files found in ./C#.'
+          }
+
+          New-Item -ItemType Directory -Path './dist' -Force | Out-Null
+          $compilerArgs = @(
+            '/nologo'
+            '/target:exe'
+            '/platform:anycpu'
+            '/optimize+'
+            '/codepage:65001'
+            '/out:dist/SharpXDecrypt.exe'
+            "/reference:$(Join-Path $framework 'System.dll')"
+            "/reference:$(Join-Path $framework 'System.Core.dll')"
+            "/reference:$(Join-Path $framework 'System.DirectoryServices.dll')"
+          )
+
+          & $csc @compilerArgs @sources
+          if ($LASTEXITCODE -ne 0) {
+            throw "Compilation failed: exit code $LASTEXITCODE"
+          }
+          if (-not (Test-Path -LiteralPath './dist/SharpXDecrypt.exe')) {
+            throw 'Expected executable was not generated.'
+          }
+
+          Copy-Item -LiteralPath './LICENSE' -Destination './dist/LICENSE'
+          "Source commit: $env:GITHUB_SHA" |
+            Set-Content -LiteralPath './dist/source-commit.txt' -Encoding utf8
+          $hash = (Get-FileHash -LiteralPath './dist/SharpXDecrypt.exe' -Algorithm SHA256).Hash
+          "$hash  SharpXDecrypt.exe" |
+            Set-Content -LiteralPath './dist/SHA256SUMS.txt' -Encoding ascii
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SharpXDecrypt-windows-anycpu
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
